@@ -1,6 +1,4 @@
-// api/health.js
-// Simple health endpoint that attempts a DB connection and reports status.
-
+// Minimal DB health endpoint for Vercel
 const { connectToDatabase } = require('../lib/mongoose');
 
 module.exports = async (req, res) => {

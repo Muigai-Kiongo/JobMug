@@ -1,7 +1,6 @@
-// lib/mongoose.js
 // Serverless-friendly mongoose connection helper for Vercel (CommonJS).
 // Caches the connection on the global object to reuse warm containers and prevents
-// creating a new connection on every invocation.
+// creating a new connection on every invocation. Retries with exponential backoff.
 
 const mongoose = require('mongoose');
 
@@ -26,7 +25,7 @@ async function connectToDatabase(mongoUri, opts = {}) {
     globalRef[CACHE_KEY] = { conn: null, promise: null };
   }
 
-  // If there's an active connected mongoose instance, return it
+  // If an active connected instance exists, return it
   if (globalRef[CACHE_KEY].conn && globalRef[CACHE_KEY].conn.connection && globalRef[CACHE_KEY].conn.connection.readyState === 1) {
     return globalRef[CACHE_KEY].conn;
   }
@@ -35,7 +34,7 @@ async function connectToDatabase(mongoUri, opts = {}) {
     const connectOpts = Object.assign({}, defaults, opts);
 
     globalRef[CACHE_KEY].promise = (async () => {
-      // Optional: disable buffering if you want queries to fail fast
+      // Optional: set mongoose to fail fast instead of buffering:
       // mongoose.set('bufferCommands', false);
 
       const maxAttempts = opts.maxAttempts || 4;
@@ -51,10 +50,8 @@ async function connectToDatabase(mongoUri, opts = {}) {
           return mongoose;
         } catch (err) {
           lastErr = err;
-          // If final attempt, break and throw
           if (attempt >= maxAttempts) break;
           const wait = baseDelay * Math.pow(2, attempt - 1);
-          // exponential backoff
           await new Promise((r) => setTimeout(r, wait));
         }
       }
