@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'https://job-mug-api.vercel.app'
+  baseURL: import.meta.env.VITE_API_BASE_URL || ''
   // When using the Vite proxy, baseURL can be empty and /api/... will be proxied.
 });
 
