@@ -9,8 +9,8 @@ const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/job-board';
 
 // Connection tuning
-const DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 10000;
-const DEFAULT_SOCKET_TIMEOUT_MS = 45000;
+const DEFAULT_SERVER_SELECTION_TIMEOUT_MS = Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS) || 10000;
+const DEFAULT_SOCKET_TIMEOUT_MS = Number(process.env.MONGO_SOCKET_TIMEOUT_MS) || 45000;
 
 /**
  * Connect to MongoDB with retries and exponential backoff.
@@ -23,15 +23,13 @@ async function connectWithRetry(uri, { maxAttempts = 5, baseDelay = 1000 } = {})
 
   // Configure mongoose global settings
   mongoose.set('strictQuery', false);
-  // Optionally disable buffering so queries fail fast instead of buffering
-  // mongoose.set('bufferCommands', false);
 
   const connectOptions = {
     useNewUrlParser: true,
     useUnifiedTopology: true,
     serverSelectionTimeoutMS: DEFAULT_SERVER_SELECTION_TIMEOUT_MS,
     socketTimeoutMS: DEFAULT_SOCKET_TIMEOUT_MS,
-    // poolSize: 10, // optional tuning
+    // poolSize: Number(process.env.MONGO_POOL_SIZE) || 10, // optional tuning
   };
 
   let attempt = 0;
@@ -43,7 +41,7 @@ async function connectWithRetry(uri, { maxAttempts = 5, baseDelay = 1000 } = {})
       console.info(`[mongo] attempt ${attempt} connecting to ${uri}`);
       await mongoose.connect(uri, connectOptions);
       console.info('[mongo] connected');
-      return;
+      return mongoose;
     } catch (err) {
       lastErr = err;
       console.error(`[mongo] connection attempt ${attempt} failed: ${err.message || err}`);
@@ -58,21 +56,29 @@ async function connectWithRetry(uri, { maxAttempts = 5, baseDelay = 1000 } = {})
   throw lastErr;
 }
 
-async function start() {
+/**
+ * Start the HTTP server. Returns the server instance after listening.
+ * If this module is required (not run directly), callers can call start() themselves.
+ */
+async function start({ port = PORT, mongoUri = MONGO_URI } = {}) {
   try {
-    await connectWithRetry(MONGO_URI, { maxAttempts: 6, baseDelay: 1000 });
+    await connectWithRetry(mongoUri, { maxAttempts: 6, baseDelay: 1000 });
   } catch (err) {
     console.error('Failed to connect to MongoDB after retries:', err && err.message ? err.message : err);
-    // Exit with non-zero so orchestrator (Vercel dev server, Docker, systemd, etc.) can restart
-    process.exit(1);
+    // If this file was run directly, exit so orchestrator can restart.
+    if (require.main === module) {
+      process.exit(1);
+    }
+    // Otherwise throw so caller (serverless wrapper) can handle the error.
+    throw err;
   }
 
-  const server = app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
+  const server = app.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
   });
 
-  // Optional: increase keepAlive/timeouts if behind load balancer or proxy
-  // server.keepAliveTimeout = 65000;
+  // If running on a long-running host you may want to tweak keepAliveTimeout:
+  // server.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS) || 65000;
 
   // Graceful shutdown helper
   let closing = false;
@@ -84,47 +90,68 @@ async function start() {
     server.close(async (err) => {
       if (err) {
         console.error('[shutdown] error closing server:', err);
-        process.exit(1);
+        // If run directly, exit non-zero
+        if (require.main === module) process.exit(1);
+        return;
       }
       try {
         await mongoose.disconnect();
         console.info('[shutdown] mongoose disconnected');
-        process.exit(0);
+        if (require.main === module) process.exit(0);
       } catch (e) {
         console.error('[shutdown] error during mongoose disconnect', e);
-        process.exit(1);
+        if (require.main === module) process.exit(1);
       }
     });
 
     // force exit after timeout
     setTimeout(() => {
       console.warn('[shutdown] timed out - forcing exit');
-      process.exit(1);
+      if (require.main === module) process.exit(1);
     }, 30_000).unref();
   }
 
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  // Only register process listeners when running as main module; if required by
+  // another module (e.g. serverless wrapper) that wrapper should manage lifecycle.
+  if (require.main === module) {
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-  // Catch unhandled rejections / uncaught exceptions and shutdown
-  process.on('unhandledRejection', (reason) => {
-    console.error('[process] unhandledRejection:', reason);
-    // attempt graceful shutdown
-    gracefulShutdown('unhandledRejection');
-  });
+    // Catch unhandled rejections / uncaught exceptions and shutdown
+    process.on('unhandledRejection', (reason) => {
+      console.error('[process] unhandledRejection:', reason);
+      // attempt graceful shutdown
+      gracefulShutdown('unhandledRejection');
+    });
 
-  process.on('uncaughtException', (err) => {
-    console.error('[process] uncaughtException:', err);
-    // attempt graceful shutdown
-    gracefulShutdown('uncaughtException');
-  });
+    process.on('uncaughtException', (err) => {
+      console.error('[process] uncaughtException:', err);
+      // attempt graceful shutdown
+      gracefulShutdown('uncaughtException');
+    });
+  }
 
-  // Optional: log mongoose connection state changes for observability
+  // Mongoose connection event logging (always safe to attach)
   mongoose.connection.on('connected', () => console.info('[mongo] event connected'));
   mongoose.connection.on('reconnected', () => console.info('[mongo] event reconnected'));
   mongoose.connection.on('disconnected', () => console.warn('[mongo] event disconnected'));
   mongoose.connection.on('close', () => console.warn('[mongo] event close'));
   mongoose.connection.on('error', (err) => console.error('[mongo] event error', err && err.message ? err.message : err));
+
+  return server;
 }
 
-start();
+// If run directly, start the server. If required, do nothing (caller can call start()).
+if (require.main === module) {
+  // start() will call process.exit(1) on failure.
+  start().catch((err) => {
+    // Defensive fallback: log and exit if something unexpected bubbles up
+    console.error('[bootstrap] fatal error starting server:', err && err.message ? err.message : err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  start,
+  connectWithRetry
+};
