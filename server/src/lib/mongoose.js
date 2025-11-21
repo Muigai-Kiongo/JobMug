@@ -15,8 +15,7 @@ const DEFAULT_SERVER_SELECTION_TIMEOUT_MS = Number(process.env.MONGO_SERVER_SELE
 const CACHE_KEY = '__mongoose_connection_cache__';
 
 const defaults = {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+  // mongoose v7 uses sensible defaults; explicit values kept for clarity
   serverSelectionTimeoutMS: DEFAULT_SERVER_SELECTION_TIMEOUT_MS,
   socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS) || 45000
 };
@@ -24,6 +23,20 @@ const defaults = {
 if (!global[CACHE_KEY]) {
   global[CACHE_KEY] = { conn: null, promise: null };
 }
+
+// Helpful connection event handlers — useful for debugging in serverless logs
+mongoose.connection.on('error', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('[mongoose] connection error:', err && (err.message || err));
+});
+mongoose.connection.on('disconnected', () => {
+  // eslint-disable-next-line no-console
+  console.warn('[mongoose] disconnected');
+});
+mongoose.connection.on('connected', () => {
+  // eslint-disable-next-line no-console
+  console.info('[mongoose] connected');
+});
 
 /**
  * Connect to MongoDB with retries and caching.
@@ -36,6 +49,8 @@ async function connectToDatabase(mongoUri, { maxAttempts = 4, baseDelay = 500, .
 
   // Return existing established connection
   if (global[CACHE_KEY].conn && global[CACHE_KEY].conn.connection && global[CACHE_KEY].conn.connection.readyState === 1) {
+    // eslint-disable-next-line no-console
+    console.info('[mongoose] reusing cached connection');
     return global[CACHE_KEY].conn;
   }
 
@@ -56,6 +71,7 @@ async function connectToDatabase(mongoUri, { maxAttempts = 4, baseDelay = 500, .
           lastErr = err;
           if (attempt >= maxAttempts) break;
           const wait = baseDelay * Math.pow(2, attempt - 1);
+          // eslint-disable-next-line no-console
           console.warn(`[mongoose] connect attempt ${attempt} failed; retrying in ${wait}ms.`, err && (err.message || err));
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r) => setTimeout(r, wait));
