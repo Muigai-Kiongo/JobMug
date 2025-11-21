@@ -1,35 +1,31 @@
-const serverless = require('serverless-http');
-const app = require('../src/app'); // ensure path correct: server/src/app.js
-const { connectToDatabase } = require('../lib/mongoose'); // optional helper if you have it
+// server/api/index.js
+// Vercel serverless wrapper for the Express app (server/src/app.js).
+// Exports a handler that connects to DB (if configured) and delegates to serverless-http-wrapped express app.
 
+const serverless = require('serverless-http');
+const app = require('../src/app'); // path: server/src/app.js
 let handler = null;
-let isConnected = false;
+let initialized = false;
+
+async function init() {
+  // If you need DB connection caching, require the helper here
+  // const { connectToDatabase } = require('../lib/mongoose');
+  // const uri = process.env.MONGODB_URI || process.env.MONGO_URI;
+  // if (uri && connectToDatabase) await connectToDatabase(uri, { maxAttempts: 4, baseDelay: 500 });
+
+  handler = serverless(app);
+  initialized = true;
+}
 
 module.exports = async (req, res) => {
-  // quick preflight/CORS short-circuit if you need it (optional)
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-    return res.status(200).end();
-  }
-
-  // Ensure DB connection if you use MongoDB (best-effort; remove if not needed)
-  if (!isConnected) {
-    try {
-      const uri = process.env.MONGODB_URI || process.env.MONGO_URI;
-      if (uri && connectToDatabase) {
-        await connectToDatabase(uri, { serverSelectionTimeoutMS: 10000, maxAttempts: 4, baseDelay: 500 });
-      }
-      isConnected = true;
-      handler = serverless(app);
-    } catch (err) {
-      console.error('DB connection failed in serverless wrapper:', err && err.message ? err.message : err);
-      res.statusCode = 503;
-      return res.end(JSON.stringify({ error: 'DB connection failed', detail: err?.message || String(err) }));
+  try {
+    if (!initialized) {
+      await init();
     }
+    return handler(req, res);
+  } catch (err) {
+    console.error('Serverless wrapper initialization error:', err && err.message ? err.message : err);
+    res.statusCode = 500;
+    return res.end(JSON.stringify({ error: 'Server initialization failed', detail: err?.message }));
   }
-
-  // Delegate to express app wrapped by serverless-http
-  return handler(req, res);
 };
