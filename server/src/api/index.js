@@ -1,14 +1,12 @@
-// api/index.js – Vercel serverless handler
 const serverless = require('serverless-http');
-const app = require('../app'); // your express app WITHOUT app.listen()
-const { connectToDatabase } = require('../lib/mongoose');
+const app = require('../src/app'); // ensure path correct: server/src/app.js
+const { connectToDatabase } = require('../lib/mongoose'); // optional helper if you have it
 
-// Make sure DB connection happens only once in serverless environment
+let handler = null;
 let isConnected = false;
-let handler = serverless(app);
 
 module.exports = async (req, res) => {
-  // Handle CORS preflight
+  // quick preflight/CORS short-circuit if you need it (optional)
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
@@ -16,16 +14,22 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
+  // Ensure DB connection if you use MongoDB (best-effort; remove if not needed)
   if (!isConnected) {
     try {
-      await connectToDatabase(process.env.MONGO_URI);
+      const uri = process.env.MONGODB_URI || process.env.MONGO_URI;
+      if (uri && connectToDatabase) {
+        await connectToDatabase(uri, { serverSelectionTimeoutMS: 10000, maxAttempts: 4, baseDelay: 500 });
+      }
       isConnected = true;
-      console.log("MongoDB connected (serverless)");
+      handler = serverless(app);
     } catch (err) {
-      console.error("MongoDB connection failed:", err.message);
-      return res.status(503).json({ error: "DB connection failed" });
+      console.error('DB connection failed in serverless wrapper:', err && err.message ? err.message : err);
+      res.statusCode = 503;
+      return res.end(JSON.stringify({ error: 'DB connection failed', detail: err?.message || String(err) }));
     }
   }
 
+  // Delegate to express app wrapped by serverless-http
   return handler(req, res);
 };

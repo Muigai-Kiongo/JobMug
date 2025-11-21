@@ -2,8 +2,9 @@ import React, { useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { FiEye, FiEyeOff } from "react-icons/fi"
 import { useAuth } from "../context/AuthContext"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
+// Use relative imports so production build doesn't rely on alias resolution
+import { Input } from "../components/ui/input"
+import { Button } from "../components/ui/button"
 import { toast } from "sonner"
 
 export default function Login() {
