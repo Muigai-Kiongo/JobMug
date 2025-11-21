@@ -16,7 +16,7 @@ This extends the minimal job board with authentication and role-based features:
 
 2. Copy `.env.example` to `.env` and set values:
    - MONGO_URI (example: mongodb://localhost:27017/job-board)
-   - PORT
+   - PORT : 3000
    - JWT_SECRET
 
 3. Run in development:
